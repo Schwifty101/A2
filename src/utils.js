@@ -96,3 +96,4 @@ module.exports = {
 	md5
 };
 console.log('test');
+console.log('test');
