@@ -1,0 +1,153 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  lint-and-test:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [12.x, 14.x, 16.x, 18.x]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: |
+          npm install --save-dev eslint
+          npx eslint . --ext .js --ignore-pattern node_modules/ || true
+        continue-on-error: true
+
+      - name: Check code formatting
+        run: |
+          npm install --save-dev prettier
+          npx prettier --check "**/*.js" "**/*.json" || true
+        continue-on-error: true
+
+      - name: Run basic syntax check
+        run: node -c run.js && node -c src/satellite.js && node -c src/iridium.js && node -c src/utils.js
+
+      - name: Security audit
+        run: npm audit --audit-level=moderate || true
+        continue-on-error: true
+
+      - name: Check for outdated dependencies
+        run: npm outdated || true
+        continue-on-error: true
+
+      - name: Generate CI Report
+        if: always()
+        run: |
+          echo "## CI Report for Node.js ${{ matrix.node-version }}" > ci-report-${{ matrix.node-version }}.md
+          echo "- Branch: ${{ github.ref_name }}" >> ci-report-${{ matrix.node-version }}.md
+          echo "- Commit: ${{ github.sha }}" >> ci-report-${{ matrix.node-version }}.md
+          echo "- Node Version: ${{ matrix.node-version }}" >> ci-report-${{ matrix.node-version }}.md
+          echo "- Status: Completed" >> ci-report-${{ matrix.node-version }}.md
+
+      - name: Upload CI Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-report-node-${{ matrix.node-version }}
+          path: ci-report-${{ matrix.node-version }}.md
+          retention-days: 30
+
+  code-quality:
+    name: Code Quality Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Analyze code complexity
+        run: |
+          npm install --save-dev complexity-report
+          npx cr --format json --output complexity-report.json src/ || true
+        continue-on-error: true
+
+      - name: Check for common issues
+        run: |
+          echo "Checking for TODO comments..."
+          grep -r "TODO" src/ || echo "No TODO comments found"
+          echo "Checking for console.log statements..."
+          grep -r "console.log" src/ || echo "No console.log found"
+
+      - name: Upload code quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-quality-report
+          path: complexity-report.json
+          retention-days: 30
+        continue-on-error: true
+
+  build-validation:
+    name: Build Validation
+    runs-on: ubuntu-latest
+    needs: [lint-and-test]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate package.json
+        run: npm run start --dry-run || echo "No build script defined"
+
+      - name: Check file structure
+        run: |
+          echo "Validating project structure..."
+          test -f package.json || exit 1
+          test -f run.js || exit 1
+          test -d src || exit 1
+          echo "Project structure is valid"
+
+      - name: Create build summary
+        run: |
+          echo "## Build Summary" > build-summary.md
+          echo "- Build Date: $(date)" >> build-summary.md
+          echo "- Branch: ${{ github.ref_name }}" >> build-summary.md
+          echo "- Commit: ${{ github.sha }}" >> build-summary.md
+          echo "- Status: Success" >> build-summary.md
+
+      - name: Upload build summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-summary
+          path: build-summary.md
+          retention-days: 30

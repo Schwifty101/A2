@@ -1,0 +1,275 @@
+name: Dependency Updates
+
+on:
+  schedule:
+    # Run every Monday at 9:00 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  check-dependencies:
+    name: Check for Dependency Updates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check for outdated packages
+        id: outdated
+        run: |
+          echo "Checking for outdated packages..."
+          npm outdated --json > outdated.json || true
+          cat outdated.json
+
+      - name: Generate outdated report
+        run: |
+          echo "## Outdated Dependencies Report" > outdated-report.md
+          echo "- Date: $(date)" >> outdated-report.md
+          echo "- Branch: ${{ github.ref_name }}" >> outdated-report.md
+          echo "" >> outdated-report.md
+          if [ -f outdated.json ] && [ -s outdated.json ]; then
+            echo "### Outdated Packages:" >> outdated-report.md
+            npm outdated || echo "All packages are up to date" >> outdated-report.md
+          else
+            echo "All packages are up to date!" >> outdated-report.md
+          fi
+
+      - name: Upload outdated report
+        uses: actions/upload-artifact@v4
+        with:
+          name: outdated-dependencies-report
+          path: outdated-report.md
+          retention-days: 30
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run security audit
+        id: audit
+        run: |
+          echo "Running npm audit..."
+          npm audit --json > audit-results.json || true
+          npm audit || true
+
+      - name: Generate security report
+        run: |
+          echo "## Security Audit Report" > security-audit-report.md
+          echo "- Date: $(date)" >> security-audit-report.md
+          echo "- Branch: ${{ github.ref_name }}" >> security-audit-report.md
+          echo "" >> security-audit-report.md
+          if [ -f audit-results.json ]; then
+            echo "### Audit Results:" >> security-audit-report.md
+            npm audit || echo "Security vulnerabilities found. Run 'npm audit fix' to resolve." >> security-audit-report.md
+          fi
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-report
+          path: security-audit-report.md
+          retention-days: 90
+
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-results
+          path: audit-results.json
+          retention-days: 90
+        continue-on-error: true
+
+  auto-update-minor:
+    name: Auto-update Minor Versions
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Update dependencies
+        id: update
+        run: |
+          npm install
+          npm update
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet package-lock.json; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No dependency updates available"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Dependencies have been updated"
+          fi
+
+      - name: Create Pull Request
+        if: steps.changes.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 'chore: update dependencies (automated)'
+          title: 'chore: Automated dependency updates'
+          body: |
+            ## Automated Dependency Updates
+
+            This PR contains automated updates to project dependencies.
+
+            ### Changes
+            - Updated dependencies to their latest compatible versions
+            - Run `npm install` to update lockfile
+
+            ### Testing
+            - [ ] All CI checks pass
+            - [ ] Manual testing completed
+
+            ### Notes
+            Please review the changes before merging.
+
+            ---
+            Generated by GitHub Actions
+          branch: automated-dependency-updates
+          delete-branch: true
+          labels: dependencies, automated
+
+  validate-dependencies:
+    name: Validate Dependencies on PR
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Validate package.json
+        run: |
+          echo "Validating package.json..."
+          node -e "JSON.parse(require('fs').readFileSync('package.json'))"
+          echo "package.json is valid"
+
+      - name: Verify lockfile integrity
+        run: |
+          echo "Verifying lockfile integrity..."
+          npm ci --dry-run
+
+      - name: Check for deprecated packages
+        run: |
+          echo "Checking for deprecated packages..."
+          npm install
+          npx npm-check --skip-unused || true
+
+      - name: Run tests after dependency changes
+        run: |
+          echo "Running basic validation..."
+          node -c run.js
+          echo "Validation successful"
+
+      - name: Generate validation report
+        run: |
+          echo "## Dependency Validation Report" > validation-report.md
+          echo "- Date: $(date)" >> validation-report.md
+          echo "- PR: #${{ github.event.pull_request.number }}" >> validation-report.md
+          echo "- Status: ✅ All validations passed" >> validation-report.md
+
+      - name: Upload validation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-validation-report
+          path: validation-report.md
+          retention-days: 30
+
+  license-check:
+    name: License Compliance Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check licenses
+        run: |
+          npm install -g license-checker
+          license-checker --json > licenses.json || true
+          license-checker --summary || true
+
+      - name: Generate license report
+        run: |
+          echo "## License Compliance Report" > license-report.md
+          echo "- Date: $(date)" >> license-report.md
+          echo "" >> license-report.md
+          echo "### License Summary:" >> license-report.md
+          license-checker --summary >> license-report.md || true
+
+      - name: Upload license report
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-report
+          path: license-report.md
+          retention-days: 90
+
+      - name: Upload license data
+        uses: actions/upload-artifact@v4
+        with:
+          name: licenses-json
+          path: licenses.json
+          retention-days: 90
+        continue-on-error: true

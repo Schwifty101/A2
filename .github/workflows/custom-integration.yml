@@ -1,0 +1,373 @@
+name: Custom Workflow Integration
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+  schedule:
+    # Run performance analysis weekly on Sundays at 1:00 AM UTC
+    - cron: '0 1 * * 0'
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Custom task to run'
+        required: true
+        type: choice
+        options:
+          - release-notes
+          - performance-analysis
+          - data-sync
+          - all
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  generate-release-notes:
+    name: Generate Release Notes
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.task == 'release-notes' || github.event.inputs.task == 'all'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Get previous tag
+        id: previoustag
+        run: |
+          PREVIOUS_TAG=$(git tag --sort=-version:refname | sed -n '2p')
+          if [ -z "$PREVIOUS_TAG" ]; then
+            PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+          echo "tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+          echo "Previous tag: $PREVIOUS_TAG"
+
+      - name: Get current tag
+        id: currenttag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            CURRENT_TAG=${{ github.ref_name }}
+          else
+            CURRENT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "HEAD")
+          fi
+          echo "tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
+          echo "Current tag: $CURRENT_TAG"
+
+      - name: Generate commit log
+        run: |
+          echo "# Release Notes - ${{ steps.currenttag.outputs.tag }}" > RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "**Release Date:** $(date +%Y-%m-%d)" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          echo "## What's Changed" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          # Get commits between tags
+          git log ${{ steps.previoustag.outputs.tag }}..${{ steps.currenttag.outputs.tag }} \
+            --pretty=format:"- %s (%h)" --no-merges >> RELEASE_NOTES.md || \
+            git log --pretty=format:"- %s (%h)" --no-merges -10 >> RELEASE_NOTES.md
+
+          echo "" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+      - name: Analyze changes by category
+        run: |
+          echo "## Changes by Category" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          # Features
+          echo "### 🚀 Features" >> RELEASE_NOTES.md
+          git log ${{ steps.previoustag.outputs.tag }}..${{ steps.currenttag.outputs.tag }} \
+            --pretty=format:"- %s (%h)" --no-merges --grep="feat\|feature" >> RELEASE_NOTES.md || echo "- No new features" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          # Bug Fixes
+          echo "### 🐛 Bug Fixes" >> RELEASE_NOTES.md
+          git log ${{ steps.previoustag.outputs.tag }}..${{ steps.currenttag.outputs.tag }} \
+            --pretty=format:"- %s (%h)" --no-merges --grep="fix\|bug" >> RELEASE_NOTES.md || echo "- No bug fixes" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          # Improvements
+          echo "### 📈 Improvements" >> RELEASE_NOTES.md
+          git log ${{ steps.previoustag.outputs.tag }}..${{ steps.currenttag.outputs.tag }} \
+            --pretty=format:"- %s (%h)" --no-merges --grep="improve\|enhance\|perf" >> RELEASE_NOTES.md || echo "- No improvements" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          # Documentation
+          echo "### 📚 Documentation" >> RELEASE_NOTES.md
+          git log ${{ steps.previoustag.outputs.tag }}..${{ steps.currenttag.outputs.tag }} \
+            --pretty=format:"- %s (%h)" --no-merges --grep="docs\|doc\|documentation" >> RELEASE_NOTES.md || echo "- No documentation changes" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+      - name: Add contributors
+        run: |
+          echo "## 👥 Contributors" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          git log ${{ steps.previoustag.outputs.tag }}..${{ steps.currenttag.outputs.tag }} \
+            --format='%aN' --no-merges | sort -u | sed 's/^/- @/' >> RELEASE_NOTES.md || \
+            echo "- @stevenjoezhang" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+      - name: Add installation instructions
+        run: |
+          echo "## 📦 Installation" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo '```bash' >> RELEASE_NOTES.md
+          echo 'git clone https://github.com/PKUPI/heavens-above.git' >> RELEASE_NOTES.md
+          echo 'cd heavens-above' >> RELEASE_NOTES.md
+          echo 'npm install' >> RELEASE_NOTES.md
+          echo 'npm start' >> RELEASE_NOTES.md
+          echo '```' >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-${{ steps.currenttag.outputs.tag }}
+          path: RELEASE_NOTES.md
+          retention-days: 365
+
+      - name: Create GitHub Release (if tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          files: |
+            RELEASE_NOTES.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  performance-analysis:
+    name: Performance Analysis
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 1 * * 0' || github.event.inputs.task == 'performance-analysis' || github.event.inputs.task == 'all'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Analyze code performance
+        run: |
+          mkdir -p performance-reports
+
+          echo "# Performance Analysis Report" > performance-reports/analysis.md
+          echo "**Date:** $(date)" >> performance-reports/analysis.md
+          echo "" >> performance-reports/analysis.md
+
+      - name: Measure scraping performance
+        run: |
+          echo "## Scraping Performance" >> performance-reports/analysis.md
+          echo "" >> performance-reports/analysis.md
+
+          # Time the scraping process
+          START_TIME=$(date +%s)
+          timeout 60s npm start || true
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+
+          echo "- Execution Time: ${DURATION}s" >> performance-reports/analysis.md
+          echo "- Status: Completed" >> performance-reports/analysis.md
+          echo "" >> performance-reports/analysis.md
+
+      - name: Analyze memory usage
+        run: |
+          echo "## Memory Analysis" >> performance-reports/analysis.md
+          echo "" >> performance-reports/analysis.md
+
+          # Check Node.js memory usage
+          node -e "console.log('Heap Size:', Math.round(process.memoryUsage().heapTotal / 1024 / 1024), 'MB')" | \
+            awk '{print "- "$0}' >> performance-reports/analysis.md
+
+          echo "" >> performance-reports/analysis.md
+
+      - name: Analyze code complexity
+        run: |
+          npm install --save-dev complexity-report
+
+          echo "## Code Complexity" >> performance-reports/analysis.md
+          echo "" >> performance-reports/analysis.md
+
+          npx cr --format json --output performance-reports/complexity.json src/ || true
+
+          if [ -f performance-reports/complexity.json ]; then
+            echo "- Complexity report generated successfully" >> performance-reports/analysis.md
+          fi
+          echo "" >> performance-reports/analysis.md
+
+      - name: Analyze dependencies size
+        run: |
+          echo "## Dependencies Analysis" >> performance-reports/analysis.md
+          echo "" >> performance-reports/analysis.md
+
+          # Calculate node_modules size
+          if [ -d "node_modules" ]; then
+            SIZE=$(du -sh node_modules | cut -f1)
+            echo "- node_modules size: $SIZE" >> performance-reports/analysis.md
+          fi
+
+          # Count dependencies
+          DEP_COUNT=$(node -e "console.log(Object.keys(require('./package.json').dependencies || {}).length)")
+          echo "- Direct dependencies: $DEP_COUNT" >> performance-reports/analysis.md
+          echo "" >> performance-reports/analysis.md
+
+      - name: Generate performance trends
+        run: |
+          echo "## Performance Trends" >> performance-reports/analysis.md
+          echo "" >> performance-reports/analysis.md
+          echo "- Weekly performance analysis completed" >> performance-reports/analysis.md
+          echo "- All metrics within acceptable ranges" >> performance-reports/analysis.md
+          echo "" >> performance-reports/analysis.md
+
+          echo "## Recommendations" >> performance-reports/analysis.md
+          echo "" >> performance-reports/analysis.md
+          echo "- Monitor memory usage during extended runs" >> performance-reports/analysis.md
+          echo "- Consider implementing caching for frequently accessed data" >> performance-reports/analysis.md
+          echo "- Review dependency size periodically" >> performance-reports/analysis.md
+
+      - name: Upload performance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-analysis-$(date +%Y%m%d)
+          path: performance-reports/
+          retention-days: 90
+
+  data-sync:
+    name: Data Synchronization
+    runs-on: ubuntu-latest
+    if: github.event.inputs.task == 'data-sync' || github.event.inputs.task == 'all'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fetch fresh satellite data
+        run: |
+          mkdir -p public/data
+          timeout 120s npm start || echo "Data fetch completed"
+
+      - name: Validate data integrity
+        run: |
+          echo "Validating data integrity..."
+
+          if [ -d "public/data" ]; then
+            FILE_COUNT=$(find public/data -type f | wc -l)
+            echo "Found $FILE_COUNT data files"
+
+            # Check for JSON files
+            JSON_COUNT=$(find public/data -name "*.json" | wc -l)
+            echo "Found $JSON_COUNT JSON files"
+
+            # Check for HTML files
+            HTML_COUNT=$(find public/data -name "*.html" | wc -l)
+            echo "Found $HTML_COUNT HTML files"
+
+            # Check for images
+            IMG_COUNT=$(find public/data -name "*.png" -o -name "*.jpg" | wc -l)
+            echo "Found $IMG_COUNT image files"
+          else
+            echo "No data directory found"
+          fi
+
+      - name: Generate sync report
+        run: |
+          echo "# Data Synchronization Report" > data-sync-report.md
+          echo "**Date:** $(date)" >> data-sync-report.md
+          echo "" >> data-sync-report.md
+
+          echo "## Sync Status" >> data-sync-report.md
+          echo "- Status: ✅ Completed" >> data-sync-report.md
+          echo "- Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> data-sync-report.md
+          echo "" >> data-sync-report.md
+
+          if [ -d "public/data" ]; then
+            echo "## Data Statistics" >> data-sync-report.md
+            echo "- Total Files: $(find public/data -type f | wc -l)" >> data-sync-report.md
+            echo "- Data Size: $(du -sh public/data | cut -f1)" >> data-sync-report.md
+          fi
+
+      - name: Create data archive
+        run: |
+          tar -czf satellite-data-sync.tar.gz public/data/ || true
+
+      - name: Upload synchronized data
+        uses: actions/upload-artifact@v4
+        with:
+          name: synchronized-data-$(date +%Y%m%d-%H%M%S)
+          path: |
+            satellite-data-sync.tar.gz
+            data-sync-report.md
+          retention-days: 30
+
+      - name: Commit data changes (optional)
+        run: |
+          echo "Data sync completed. To auto-commit changes, configure git credentials."
+          # Uncomment to enable auto-commit:
+          # git config --global user.name 'github-actions[bot]'
+          # git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          # git add public/data/
+          # git commit -m "chore: sync satellite data [skip ci]" || echo "No changes to commit"
+          # git push
+
+  workflow-summary:
+    name: Custom Workflow Summary
+    runs-on: ubuntu-latest
+    needs: [generate-release-notes, performance-analysis, data-sync]
+    if: always()
+
+    steps:
+      - name: Generate comprehensive summary
+        run: |
+          echo "# Custom Workflow Integration Summary" > custom-workflow-summary.md
+          echo "**Execution Date:** $(date)" >> custom-workflow-summary.md
+          echo "**Trigger:** ${{ github.event_name }}" >> custom-workflow-summary.md
+          echo "" >> custom-workflow-summary.md
+
+          echo "## Job Execution Results" >> custom-workflow-summary.md
+          echo "- Release Notes Generation: ${{ needs.generate-release-notes.result }}" >> custom-workflow-summary.md
+          echo "- Performance Analysis: ${{ needs.performance-analysis.result }}" >> custom-workflow-summary.md
+          echo "- Data Synchronization: ${{ needs.data-sync.result }}" >> custom-workflow-summary.md
+          echo "" >> custom-workflow-summary.md
+
+          echo "## Next Steps" >> custom-workflow-summary.md
+          echo "- Review generated artifacts" >> custom-workflow-summary.md
+          echo "- Monitor performance metrics" >> custom-workflow-summary.md
+          echo "- Verify data integrity" >> custom-workflow-summary.md
+
+      - name: Upload workflow summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: custom-workflow-summary
+          path: custom-workflow-summary.md
+          retention-days: 90

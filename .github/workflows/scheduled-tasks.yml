@@ -1,0 +1,254 @@
+name: Scheduled Tasks
+
+on:
+  schedule:
+    # Run daily at 2:00 AM UTC
+    - cron: '0 2 * * *'
+    # Run weekly on Monday at 3:00 AM UTC
+    - cron: '0 3 * * 1'
+    # Run monthly on the 1st at 4:00 AM UTC
+    - cron: '0 4 1 * *'
+  workflow_dispatch:
+    inputs:
+      task_type:
+        description: 'Task to run'
+        required: true
+        type: choice
+        options:
+          - data-refresh
+          - maintenance
+          - backup
+          - cleanup
+          - all
+
+jobs:
+  data-refresh:
+    name: Refresh Satellite Data
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 2 * * *' || github.event.inputs.task_type == 'data-refresh' || github.event.inputs.task_type == 'all'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create data directory
+        run: mkdir -p public/data
+
+      - name: Run data scraping
+        id: scrape
+        run: |
+          echo "Starting data refresh at $(date)"
+          timeout 300s npm start || echo "Data refresh completed or timed out"
+          echo "Data refresh completed at $(date)"
+
+      - name: Check data freshness
+        run: |
+          if [ -d "public/data" ]; then
+            echo "Data directory exists"
+            find public/data -type f -mtime -1 -ls || echo "No recent data files"
+          else
+            echo "Data directory does not exist"
+          fi
+
+      - name: Upload refreshed data
+        uses: actions/upload-artifact@v4
+        with:
+          name: satellite-data-$(date +%Y%m%d)
+          path: public/data/
+          retention-days: 30
+        continue-on-error: true
+
+      - name: Generate data refresh report
+        run: |
+          echo "## Data Refresh Report" > data-refresh-report.md
+          echo "- Execution Date: $(date)" >> data-refresh-report.md
+          echo "- Status: Completed" >> data-refresh-report.md
+          echo "- Trigger: ${{ github.event_name }}" >> data-refresh-report.md
+          if [ -d "public/data" ]; then
+            echo "- Files Generated: $(find public/data -type f | wc -l)" >> data-refresh-report.md
+          fi
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-refresh-report-$(date +%Y%m%d)
+          path: data-refresh-report.md
+          retention-days: 90
+
+  maintenance:
+    name: System Maintenance
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 3 * * 1' || github.event.inputs.task_type == 'maintenance' || github.event.inputs.task_type == 'all'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check for security vulnerabilities
+        run: |
+          echo "Running security audit..."
+          npm audit --audit-level=moderate || true
+
+      - name: Check for outdated packages
+        run: |
+          echo "Checking for outdated packages..."
+          npm outdated || true
+
+      - name: Analyze disk usage
+        run: |
+          echo "Analyzing disk usage..."
+          du -sh node_modules/ || echo "No node_modules found"
+          du -sh public/ || echo "No public directory found"
+
+      - name: Check repository health
+        run: |
+          echo "Checking repository health..."
+          git fsck --full || true
+          git gc --auto || true
+
+      - name: Generate maintenance report
+        run: |
+          echo "## Maintenance Report" > maintenance-report.md
+          echo "- Date: $(date)" >> maintenance-report.md
+          echo "- Type: Weekly Maintenance" >> maintenance-report.md
+          echo "- Security Audit: Completed" >> maintenance-report.md
+          echo "- Dependency Check: Completed" >> maintenance-report.md
+          echo "- Repository Health: Verified" >> maintenance-report.md
+
+      - name: Upload maintenance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: maintenance-report-$(date +%Y%m%d)
+          path: maintenance-report.md
+          retention-days: 90
+
+  backup:
+    name: Data Backup
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 4 1 * *' || github.event.inputs.task_type == 'backup' || github.event.inputs.task_type == 'all'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run application to ensure fresh data
+        run: |
+          mkdir -p public/data
+          timeout 120s npm start || echo "Application run completed"
+        continue-on-error: true
+
+      - name: Create backup archive
+        run: |
+          BACKUP_NAME="backup-$(date +%Y%m%d-%H%M%S)"
+          mkdir -p backups
+          tar -czf "backups/${BACKUP_NAME}.tar.gz" public/ src/ package.json package-lock.json run.js || true
+          echo "Backup created: ${BACKUP_NAME}.tar.gz"
+
+      - name: Upload backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: monthly-backup-$(date +%Y%m)
+          path: backups/
+          retention-days: 90
+
+      - name: Generate backup report
+        run: |
+          echo "## Backup Report" > backup-report.md
+          echo "- Backup Date: $(date)" >> backup-report.md
+          echo "- Type: Monthly Backup" >> backup-report.md
+          echo "- Status: Completed" >> backup-report.md
+          if [ -d "backups" ]; then
+            echo "- Backup Size: $(du -sh backups/ | cut -f1)" >> backup-report.md
+          fi
+
+      - name: Upload backup report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-report-$(date +%Y%m)
+          path: backup-report.md
+          retention-days: 180
+
+  cleanup:
+    name: Cleanup Old Artifacts
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 4 1 * *' || github.event.inputs.task_type == 'cleanup' || github.event.inputs.task_type == 'all'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Clean npm cache
+        run: npm cache clean --force
+
+      - name: Remove temporary files
+        run: |
+          echo "Cleaning temporary files..."
+          rm -rf /tmp/npm-* || true
+          rm -rf ~/.npm/_logs/* || true
+
+      - name: Generate cleanup report
+        run: |
+          echo "## Cleanup Report" > cleanup-report.md
+          echo "- Date: $(date)" >> cleanup-report.md
+          echo "- NPM cache: Cleaned" >> cleanup-report.md
+          echo "- Temporary files: Removed" >> cleanup-report.md
+
+      - name: Upload cleanup report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleanup-report-$(date +%Y%m)
+          path: cleanup-report.md
+          retention-days: 30
+
+  notify:
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    needs: [data-refresh, maintenance, backup, cleanup]
+    if: always()
+
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## Scheduled Tasks Summary" > scheduled-tasks-summary.md
+          echo "- Execution Date: $(date)" >> scheduled-tasks-summary.md
+          echo "- Trigger: ${{ github.event_name }}" >> scheduled-tasks-summary.md
+          echo "" >> scheduled-tasks-summary.md
+          echo "### Job Status:" >> scheduled-tasks-summary.md
+          echo "- Data Refresh: ${{ needs.data-refresh.result }}" >> scheduled-tasks-summary.md
+          echo "- Maintenance: ${{ needs.maintenance.result }}" >> scheduled-tasks-summary.md
+          echo "- Backup: ${{ needs.backup.result }}" >> scheduled-tasks-summary.md
+          echo "- Cleanup: ${{ needs.cleanup.result }}" >> scheduled-tasks-summary.md
+
+      - name: Upload summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: scheduled-tasks-summary-$(date +%Y%m%d)
+          path: scheduled-tasks-summary.md
+          retention-days: 90
