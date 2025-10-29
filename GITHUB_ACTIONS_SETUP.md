@@ -513,8 +513,6 @@ Use this checklist to ensure complete setup:
 
 **Setup Complete! 🎉**
 
-Your GitHub Actions workflows are now configured and ready to automate your development lifecycle.
-
 ---
 
 **Version:** 1.0.0
