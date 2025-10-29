@@ -108,7 +108,7 @@ jobs:
   auto-update-minor:
     name: Auto-update Minor Versions
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
       pull-requests: write
@@ -179,7 +179,7 @@ jobs:
   validate-dependencies:
     name: Validate Dependencies on PR
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Checkout code
