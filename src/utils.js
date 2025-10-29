@@ -95,3 +95,5 @@ module.exports = {
 	iridium_options,
 	md5
 };
+console.log('test');
+console.log('test');
