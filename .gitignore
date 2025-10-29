@@ -79,15 +79,11 @@ typings/
 # DynamoDB Local files
 .dynamodb/
 
-# Npm Lock files
-package-lock.json
-
 # Dist
 dist/
 
 .DS_Store
 
 public/data
-
 
 .claude

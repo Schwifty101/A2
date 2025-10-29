@@ -12,7 +12,8 @@ on:
     inputs:
       task_type:
         description: 'Task to run'
-        required: true
+        required: false
+        default: 'all'
         type: choice
         options:
           - data-refresh
@@ -25,7 +26,7 @@ jobs:
   data-refresh:
     name: Refresh Satellite Data
     runs-on: ubuntu-latest
-    if: github.event.schedule == '0 2 * * *' || github.event.inputs.task_type == 'data-refresh' || github.event.inputs.task_type == 'all'
+    if: github.event_name == 'schedule' || github.event.inputs.task_type == 'data-refresh' || github.event.inputs.task_type == 'all' || github.event.inputs.task_type == ''
 
     steps:
       - name: Checkout code
@@ -87,7 +88,7 @@ jobs:
   maintenance:
     name: System Maintenance
     runs-on: ubuntu-latest
-    if: github.event.schedule == '0 3 * * 1' || github.event.inputs.task_type == 'maintenance' || github.event.inputs.task_type == 'all'
+    if: github.event_name == 'schedule' || github.event.inputs.task_type == 'maintenance' || github.event.inputs.task_type == 'all' || github.event.inputs.task_type == ''
 
     steps:
       - name: Checkout code
@@ -143,7 +144,7 @@ jobs:
   backup:
     name: Data Backup
     runs-on: ubuntu-latest
-    if: github.event.schedule == '0 4 1 * *' || github.event.inputs.task_type == 'backup' || github.event.inputs.task_type == 'all'
+    if: github.event_name == 'schedule' || github.event.inputs.task_type == 'backup' || github.event.inputs.task_type == 'all' || github.event.inputs.task_type == ''
 
     steps:
       - name: Checkout code
@@ -198,7 +199,7 @@ jobs:
   cleanup:
     name: Cleanup Old Artifacts
     runs-on: ubuntu-latest
-    if: github.event.schedule == '0 4 1 * *' || github.event.inputs.task_type == 'cleanup' || github.event.inputs.task_type == 'all'
+    if: github.event_name == 'schedule' || github.event.inputs.task_type == 'cleanup' || github.event.inputs.task_type == 'all' || github.event.inputs.task_type == ''
 
     steps:
       - name: Checkout code
